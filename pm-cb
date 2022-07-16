@@ -9,25 +9,50 @@ use Term::ReadKey;
 use XML::LibXML;
 use WWW::Mechanize;
 use HTML::Entities;
+use Encode;
+use Path::Tiny;
+use Text::Wrap;
+$Text::Wrap::columns = 70;
 
 my $debug = @ARGV && '-d' eq shift;
 
 use constant {
-    PM_URL => 'http://www.perlmonks.org/bare/?node_id=',
+    PM_URL => 'http://perlmonks.org/bare/?node_id=',
     FREQ   => 7,
     # Node ids:
     LOGIN  => 109,
     CB     => 207304,
 };
 
-print "User? ";
-chomp( my $user = <STDIN> );
-ReadMode('noecho');
+my %user_voice;
+my @voices = qw( Allison Alex Ava Daniel Karen Kate Lee Moira
+                 Oliver Samantha Serena Susan Tessa );
 
-print "Pass? ";
-chomp( my $pass = <STDIN> );
-ReadMode('normal');
-say STDERR '*' x length $pass;
+my $config = path("/Users/apv/.PM_CREDS")->slurp;
+
+my $user = $ENV{PM_USER};
+my $pass = $ENV{PM_PASS};
+
+if ( $config )
+{
+    ( $user ) = $config =~ /PM_USER "([^"]+)/;
+    ( $pass ) = $config =~ /PM_PASS "([^"]+)/;
+}
+
+unless ( $user )
+{
+    print "User? ";
+    chomp( $user = <STDIN> );
+    ReadMode('noecho');
+}
+
+unless ( $pass )
+{
+    print "Pass? ";
+    chomp( $pass = <STDIN> );
+    ReadMode('normal');
+    say STDERR '*' x length $pass;
+}
 
 my $mech = 'WWW::Mechanize'->new;
 $mech->get(PM_URL . LOGIN);
@@ -43,47 +68,79 @@ my $from_id;
 my $previous;
 
 while (1) {
-    my $url = PM_URL . CB;
-    $url .= ";fromid=$from_id" if defined $from_id;
-    $mech->get($url);
+    eval {
+        my $url = PM_URL . CB;
+        $url .= ";fromid=$from_id" if defined $from_id;
+        $mech->get($url);
 
-    my $xml = eval { 'XML::LibXML'->load_xml(string => $mech->content) };
-    unless ( $xml )
-    {
-        say "Problem parsing XML from $url: ", $@ || "...unknown error";
-        next;
-    }
-
-    $xml->setEncoding("UTF-8");
-
-    my $time = $xml->findvalue('/chatter/info/@gentimeGMT');
-    print STDERR colored(['bright_black'], $time), "\r";
-
-    my @messages = $xml->findnodes('/chatter/message');
-
-    my $first = 1;
-    for my $message (@messages) {
-        print "\n" and undef $first if $first;
-
-        my $id = $message->findvalue('message_id');
-        if (exists $seen{$id}) {
-            if ($debug) {
-                say STDERR colored(['cyan'], "Duplicate msg $id (from $from_id");
-                say STDERR colored(['cyan'], $previous, "---\n", $xml);
+        ( my $content = $mech->content ) =~ s/(?<=encoding=")Windows-1252/UTF-8/;
+        my $xml = eval { "XML::LibXML"->load_xml(string => encode_utf8($content)) };
+        unless ( $xml )
+        {
+            sleep 20;
+            unless ( $@ =~ /Empty String at/ )
+            {
+                say "Problem parsing XML from $url: ", $@ || "...unknown error";
+                next;
             }
-
-        } else {
-            say colored(['bold blue'],
-                        '[', $message->findvalue('author'), '] '),
-                decode_entities( $message->findvalue('text') );
-            undef $seen{$id};
         }
-    }
 
-    my $new_from_id = $xml->findvalue('/chatter/message[last()]/message_id');
-    $from_id = $new_from_id if length $new_from_id;
+        my $time = $xml->findvalue('/chatter/info/@gentimeGMT');
+        print STDERR colored(['bright_black'], $time), "\r";
 
-    $previous = $xml;
+        my @messages = $xml->findnodes('/chatter/message');
+
+        my $first = 1;
+        for my $message (@messages) {
+            print "\n" and undef $first if $first;
+
+            my $id = $message->findvalue('message_id');
+            if (exists $seen{$id}) {
+                if ($debug) {
+                    say STDERR colored(['cyan'], "Duplicate msg $id (from $from_id");
+                    say STDERR colored(['cyan'], $previous, "---\n", decode_entities($xml));
+                }
+            }
+            else
+            {
+                ( my $text = $message->findvalue('text') ) =~ s/\s+\z//;
+                my $user = $message->findvalue('author');
+                my $voice = $user_voice{$user} ||= $voices[rand@voices];
+                say colored(['bold blue'], "[$user]"),
+                wrap(" ", # Space from [user].
+                     "   " . " " x length($user), # Indent to match.
+                     decode_entities($text));
+
+                system "/usr/bin/say",
+                    -v => $voice,
+                    "[[volm 0.7]]",
+                    decode_entities($text);
+
+                undef $seen{$id};
+            }
+        }
+
+        my $new_from_id = $xml->findvalue('/chatter/message[last()]/message_id');
+        $from_id = $new_from_id if length $new_from_id;
+
+        $previous = $xml;
+    };
+
+    warn $@ if $@;
+
     sleep FREQ;
 }
 
+
+__END__
+
+
+apv@Ashleys-iMac[177]~/depot/pm-cb>perl -CSD -MXML::LibXML -E '$x = XML::LibXML->load_xml( location => "cb-cp1252.xml.txt" ); $x->setEncoding("UTF-8"); say $_->findvalue("text") for $x->findnodes("//message")'
+And ¶
+Sorry for the noise…¡™£¢å…¬ß&#8706;&#730;ƒ&#8710;&#960;øˆ¨&#937;ç&#8730;
+
+TODO
+Voice list should be a circular queue.
+PM shortcuts should be handled/textified.
+    [id://…] should be fetched for the title?
+Date/time should float to the right of the chat.
