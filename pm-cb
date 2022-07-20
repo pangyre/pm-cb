@@ -1,9 +1,9 @@
 #!/usr/bin/perl
+use v5.14;
 use warnings;
 use strict;
-use feature qw{ say };
 use open ":std", ":encoding(utf8)";
-
+$| = 1;
 use Term::ANSIColor;
 use Term::ReadKey;
 use XML::LibXML;
@@ -11,14 +11,15 @@ use WWW::Mechanize;
 use HTML::Entities;
 use Encode;
 use Path::Tiny;
+use Time::Piece;
 use Text::Wrap;
 $Text::Wrap::columns = 70;
 
 my $debug = @ARGV && '-d' eq shift;
 
 use constant {
-    PM_URL => 'http://perlmonks.org/bare/?node_id=',
-    FREQ   => 7,
+    PM_URL => 'https://perlmonks.org/bare/?node_id=',
+    FREQ   => 5,
     # Node ids:
     LOGIN  => 109,
     CB     => 207304,
@@ -57,46 +58,62 @@ unless ( $pass )
 my $mech = 'WWW::Mechanize'->new;
 $mech->get(PM_URL . LOGIN);
 
-$mech->submit_form(
-                   form_number => 1,
-                   fields      => { user   => $user,
-                                    passwd => $pass,
-                                  });
+$mech->submit_form( form_number => 1,
+                    fields => { user => $user,
+                                passwd => $pass });
 
 my %seen;
 my $from_id;
 my $previous;
+my $last_message_time;
+my $started = gmtime;
+my $sleep;
 
+ CHECK:
 while (1) {
-    eval {
+    $sleep ||= FREQ;
+    my $now = gmtime;
+
+    my $return = eval {
         my $url = PM_URL . CB;
         $url .= ";fromid=$from_id" if defined $from_id;
         $mech->get($url);
 
-        ( my $content = $mech->content ) =~ s/(?<=encoding=")Windows-1252/UTF-8/;
+        my $content = $mech->content; # Corion fixed: =~ s/(?<=encoding=")Windows-1252/UTF-8/;
         my $xml = eval { "XML::LibXML"->load_xml(string => encode_utf8($content)) };
         unless ( $xml )
         {
-            sleep 20;
+            sleep 30;
             unless ( $@ =~ /Empty String at/ )
             {
                 say "Problem parsing XML from $url: ", $@ || "...unknown error";
-                next;
             }
+            return 0;
         }
 
-        my $time = $xml->findvalue('/chatter/info/@gentimeGMT');
-        print STDERR colored(['bright_black'], $time), "\r";
+        my $time = $xml->findvalue('/chatter/info/@gentimeGMT'); # This is the server time.
+        print " ", colored(['bright_black'], $time), "\r";
+        # $time = eval { Time::Piece->strptime($time,'%Y-%m-%d %H:%M:%S') };
+        # ^^^ This throws errors all the time. Not sure if it's getting a bad attribute value or what.
+        # 2022-07-18 13:38:56
+        # print STDERR colored(['bright_black'], $time), "\r";
 
         my @messages = $xml->findnodes('/chatter/message');
+        # Message time is /chatter/message/date + /chatter/message/time
+        # HOWEVER, it's not GMT… it's apparently user time.
+        # Oh, maybe it's in /chatter/message/epoch
 
         my $first = 1;
-        for my $message (@messages) {
+        $sleep = FREQ if @messages;
+        for my $message ( @messages )
+        {
             print "\n" and undef $first if $first;
 
             my $id = $message->findvalue('message_id');
-            if (exists $seen{$id}) {
-                if ($debug) {
+            if ( exists $seen{$id} )
+            {
+                if ( $debug )
+                {
                     say STDERR colored(['cyan'], "Duplicate msg $id (from $from_id");
                     say STDERR colored(['cyan'], $previous, "---\n", decode_entities($xml));
                 }
@@ -105,6 +122,11 @@ while (1) {
             {
                 ( my $text = $message->findvalue('text') ) =~ s/\s+\z//;
                 my $user = $message->findvalue('author');
+                # say "$message";
+                #if ( my $epoch = $message->findvalue('epoch') )
+                #{
+                #    $last_message_time = eval { Time::Piece->strptime( $epoch, '%s' )}
+                #}
                 my $voice = $user_voice{$user} ||= $voices[rand@voices];
                 say colored(['bold blue'], "[$user]"),
                 wrap(" ", # Space from [user].
@@ -113,11 +135,12 @@ while (1) {
 
                 system "/usr/bin/say",
                     -v => $voice,
-                    "[[volm 0.7]]",
+                    "[[volm 0.5]]",
                     decode_entities($text);
 
                 undef $seen{$id};
             }
+            # $time = Time::Piece->strptime($time,'%Y-%m-%d %H:%M:%S');
         }
 
         my $new_from_id = $xml->findvalue('/chatter/message[last()]/message_id');
@@ -126,9 +149,20 @@ while (1) {
         $previous = $xml;
     };
 
+    next CHECK if $return and $return == 0;
+
     warn $@ if $@;
 
-    sleep FREQ;
+#    if ( $last_message_time )
+#    {
+#        say "NOW: $now";
+#        say "MSG: $last_message_time";
+#        say "DFF: ", $now - $last_message_time;
+#    }
+    # $sleep++ if $sleep < 180; # Max sleep
+    print "   Sleeping: $sleep\r";
+    sleep $sleep;
+    $sleep *= 1.25 if $sleep < 600; # Max sleep, should be high if you're leaving it running.
 }
 
 
@@ -144,3 +178,125 @@ Voice list should be a circular queue.
 PM shortcuts should be handled/textified.
     [id://…] should be fetched for the title?
 Date/time should float to the right of the chat.
+
+
+
+<?xml version="1.0" encoding="UTF-8"?>
+<chatter>
+  <info site="http://perlmonks.org/" sitename="PerlMonks" ticker_id="207304" gentimeGMT="2022-07-18 14:05:12" xmlstyle="clean,new" xmlmaker="XML::Fling 1.002" count="0" fromid="01812436">Rendered by the New Chatterbox XML Ticker</info>
+</chatter>
+
+
+<?xml version="1.0" encoding="UTF-8"?>
+<chatter>
+  <info site="http://perlmonks.org/" sitename="PerlMonks" ticker_id="207304" gentimeGMT="2022-07-18 14:24:16" xmlstyle="clean,new" xmlmaker="XML::Fling 1.002" count="12" lastid="1812453" fromid="01812437">Rendered by the New Chatterbox XML Ticker</info>
+  <message>
+    <author>choroba</author>
+    <user_id>832495</user_id>
+    <date>2022-07-18</date>
+    <time>10:15:57</time>
+    <epoch>1658153757</epoch>
+    <message_id>1812442</message_id>
+    <text>I also remember when discussing the issue with [Corion] he told me one of the servers had a broken database</text>
+  </message>
+  <message>
+    <author>choroba</author>
+    <user_id>832495</user_id>
+    <date>2022-07-18</date>
+    <time>10:16:34</time>
+    <epoch>1658153794</epoch>
+    <message_id>1812443</message_id>
+    <text>But as I said, I don't remember the details</text>
+  </message>
+  <message>
+    <author>Your Mother</author>
+    <user_id>248054</user_id>
+    <date>2022-07-18</date>
+    <time>10:19:37</time>
+    <epoch>1658153977</epoch>
+    <message_id>1812444</message_id>
+    <text>I just noticed the chatter datetime and the message datetime are not the same TZ. :|</text>
+  </message>
+  <message>
+    <author>Your Mother</author>
+    <user_id>248054</user_id>
+    <date>2022-07-18</date>
+    <time>10:20:38</time>
+    <epoch>1658154038</epoch>
+    <message_id>1812445</message_id>
+    <text>I guess selecting GMT in user/tz settings will &amp;#x22;fix&amp;#x22; that.</text>
+  </message>
+  <message>
+    <author>LanX</author>
+    <user_id>708738</user_id>
+    <date>2022-07-18</date>
+    <time>10:20:51</time>
+    <epoch>1658154051</epoch>
+    <message_id>1812446</message_id>
+    <text>YM I was just looking for that diff when trying the IPs</text>
+  </message>
+  <message>
+    <author>ambrus</author>
+    <user_id>295576</user_id>
+    <date>2022-07-18</date>
+    <time>10:21:27</time>
+    <epoch>1658154087</epoch>
+    <message_id>1812447</message_id>
+    <text>"&lt;c&gt;&lt;!-- can you read this? --&gt;&lt;/c&gt;" plus 240 chars is way too long. it's like you don't understand how short 256 bytes is.</text>
+  </message>
+  <message>
+    <author>LanX</author>
+    <user_id>708738</user_id>
+    <date>2022-07-18</date>
+    <time>10:21:28</time>
+    <epoch>1658154088</epoch>
+    <message_id>1812448</message_id>
+    <text>ISTR that the user list was given with a hours old timestamp</text>
+  </message>
+  <message>
+    <author>Your Mother</author>
+    <user_id>248054</user_id>
+    <date>2022-07-18</date>
+    <time>10:22:11</time>
+    <epoch>1658154131</epoch>
+    <message_id>1812449</message_id>
+    <text>I&amp;#x27;m trying to put a ratchetted sleep into my CLI so that it sleeps progressively longer when messages are less frequently.</text>
+  </message>
+  <message>
+    <author>Your Mother</author>
+    <user_id>248054</user_id>
+    <date>2022-07-18</date>
+    <time>10:22:25</time>
+    <epoch>1658154145</epoch>
+    <message_id>1812450</message_id>
+    <text>s/ly\.\z//;</text>
+  </message>
+  <message>
+    <author>LanX</author>
+    <user_id>708738</user_id>
+    <date>2022-07-18</date>
+    <time>10:23:01</time>
+    <epoch>1658154181</epoch>
+    <message_id>1812451</message_id>
+    <text>ambrus seriously? replace &lt;c&gt;&lt;!--FFFF--&gt;&lt;/c&gt; is fully sufficent for testing</text>
+  </message>
+  <message>
+    <author>LanX</author>
+    <user_id>708738</user_id>
+    <date>2022-07-18</date>
+    <time>10:23:39</time>
+    <epoch>1658154219</epoch>
+    <message_id>1812452</message_id>
+    <text>or use unicode</text>
+  </message>
+  <message>
+    <author>LanX</author>
+    <user_id>708738</user_id>
+    <date>2022-07-18</date>
+    <time>10:24:08</time>
+    <epoch>1658154248</epoch>
+    <message_id>1812453</message_id>
+    <text>... tho 256 bytes or 256 chars?</text>
+  </message>
+</chatter>
+
