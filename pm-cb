@@ -173,7 +173,7 @@ while (1) {
 #    }
     # $sleep++ if $sleep < 180; # Max sleep
     printf " Sleeping: %.0f        \r", $sleep;
-    sleep $sleep;
+    sleep $sleep if $sleep;
     $sleep *= 1.25 if $sleep < 600; # Max sleep, should be high if you're leaving it running.
 }
 
