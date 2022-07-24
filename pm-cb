@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 use v5.14;
-use warnings;
-use strict;
+use utf8;
+use strictures;
 use open ":std", ":encoding(utf8)";
 $| = 1;
 use Term::ANSIColor;
@@ -69,6 +69,18 @@ my $last_message_time;
 my $started = gmtime;
 my $sleep;
 
+$SIG{INT} = sub {
+    if ( $sleep > FREQ )
+    {
+        warn "Resetting sleep…\n";
+        $sleep = 0;
+    }
+    else # Two within FREQ * 2.
+    {
+        exit;
+    }
+};
+
  CHECK:
 while (1) {
     $sleep ||= FREQ;
@@ -84,7 +96,7 @@ while (1) {
         unless ( $xml )
         {
             sleep 30;
-            unless ( $@ =~ /Empty String at/ )
+            unless ( $@ =~ /Empty String at|Internal Server Error/ )
             {
                 say "Problem parsing XML from $url: ", $@ || "...unknown error";
             }
@@ -160,7 +172,7 @@ while (1) {
 #        say "DFF: ", $now - $last_message_time;
 #    }
     # $sleep++ if $sleep < 180; # Max sleep
-    print "   Sleeping: $sleep\r";
+    printf " Sleeping: %.0f        \r", $sleep;
     sleep $sleep;
     $sleep *= 1.25 if $sleep < 600; # Max sleep, should be high if you're leaving it running.
 }
@@ -168,6 +180,10 @@ while (1) {
 
 __END__
 
+SHOULD put the voice stuff into a queue in another thread/fork such
+that messages are read in order but don't interrupt the fetch timing.
+
+SHOULD catch control C to skip long reads.
 
 apv@Ashleys-iMac[177]~/depot/pm-cb>perl -CSD -MXML::LibXML -E '$x = XML::LibXML->load_xml( location => "cb-cp1252.xml.txt" ); $x->setEncoding("UTF-8"); say $_->findvalue("text") for $x->findnodes("//message")'
 And ¶
