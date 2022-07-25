@@ -17,6 +17,8 @@ $Text::Wrap::columns = 70;
 
 my $debug = @ARGV && '-d' eq shift;
 
+my $terminal_width = [ GetTerminalSize() ]->[0];
+
 use constant {
     PM_URL => 'https://perlmonks.org/bare/?node_id=',
     FREQ   => 5,
@@ -98,9 +100,9 @@ while (1) {
             sleep 30;
             unless ( $@ =~ /Empty String at|Internal Server Error/ )
             {
-                say "Problem parsing XML from $url: ", $@ || "...unknown error";
+                print colored(["red"], "\rProblem parsing XML from $url: ", $@ || "\r...unknown error\n" );
             }
-            return 0;
+            return;
         }
 
         my $time = $xml->findvalue('/chatter/info/@gentimeGMT'); # This is the server time.
@@ -163,7 +165,7 @@ while (1) {
 
     next CHECK if $return and $return == 0;
 
-    warn $@ if $@;
+    print colored(["red"], "\r", $@) if $@;
 
 #    if ( $last_message_time )
 #    {
@@ -172,9 +174,19 @@ while (1) {
 #        say "DFF: ", $now - $last_message_time;
 #    }
     # $sleep++ if $sleep < 180; # Max sleep
-    printf " Sleeping: %.0f        \r", $sleep;
-    sleep $sleep if $sleep;
-    $sleep *= 1.25 if $sleep < 600; # Max sleep, should be high if you're leaving it running.
+    if ( my $countdown = $sleep )
+    {
+        while ( $countdown > 0 and $sleep >= $countdown )
+        {
+            print "\r", " " x $terminal_width, "\r"; # Clear line.
+            print colored(["grey2"], sprintf "\r Sleeping: %d/%d", $countdown--, $sleep );
+            sleep 1;
+        }
+        print "\r", " " x $terminal_width, "\r"; # Clear line.
+        print colored(["grey2"], "\r Fetching… ");
+    }
+    $sleep = int( $sleep * 1.5 ) if $sleep < 600;
+    # Max sleep ^^^ Should be highish if you're leaving it running.
 }
 
 
