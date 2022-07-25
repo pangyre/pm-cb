@@ -72,9 +72,11 @@ my $started = gmtime;
 my $sleep;
 
 $SIG{INT} = sub {
+    print "\r", " " x $terminal_width, "\r"; # Clear line.
     if ( $sleep > FREQ )
     {
-        warn "Resetting sleep…\n";
+        print colored(["grey7"], "\r Resetting sleep…\r");
+        sleep 1;
         $sleep = 0;
     }
     else # Two within FREQ * 2.
@@ -183,7 +185,7 @@ while (1) {
             sleep 1;
         }
         print "\r", " " x $terminal_width, "\r"; # Clear line.
-        print colored(["grey2"], "\r Fetching… ");
+        print colored(["grey7"], "\r Fetching… ");
     }
     $sleep = int( $sleep * 1.5 ) if $sleep < 600;
     # Max sleep ^^^ Should be highish if you're leaving it running.
